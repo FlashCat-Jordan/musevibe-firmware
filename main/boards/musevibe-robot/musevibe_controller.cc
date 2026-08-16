@@ -5,10 +5,14 @@
 #include <cJSON.h>
 #include <esp_log.h>
 
-#include <cstdlib> 
+#include <atomic>
+#include <cstdlib>
 #include <cstring>
+#include <functional>
+#include <mutex>
 
 #include "application.h"
+#include "audio/karplus_strong.h"
 #include "board.h"
 #include "config.h"
 #include "mcp_server.h"
@@ -27,6 +31,12 @@ private:
     QueueHandle_t action_queue_;
     bool has_hands_ = false;
     bool is_action_in_progress_ = false;
+
+    // Karplus-Strong 合成器：端侧物理建模 4 弦吉他和弦
+    std::mutex music_mutex_;
+    KarplusStrongSynth* synth_ = nullptr;
+    TaskHandle_t music_task_handle_ = nullptr;
+    std::atomic<bool> music_stop_flag_{false};
 
     struct MuseVibeActionParams {
         int action_type;
@@ -825,9 +835,111 @@ public:
                                }
                                std::string status = "{\"ip\":\"" + ip + "\",\"connected\":true}";
                                return status;
-                           });                           
+                           });
+
+        // ===== 音乐能力 MCP 工具（端侧 Karplus-Strong 物理建模合成）=====
+
+        mcp_server.AddTool(
+            "self.musevibe.play_chord",
+            "端侧 Karplus-Strong 物理建模合成器弹奏吉他和弦。无需云端即可实时弹奏。"
+            "chord: 和弦名 C / Dm / Em / F / G / Am（C/Am/F/G 黄金四和弦进行）；"
+            "duration_ms: 持续时长毫秒（默认 2000，范围 200~8000）",
+            PropertyList({
+                Property("chord", kPropertyTypeString, "C"),
+                Property("duration_ms", kPropertyTypeInteger, 2000, 200, 8000)
+            }),
+            [this](const PropertyList& properties) -> ReturnValue {
+                std::string chord = properties["chord"].value<std::string>();
+                int duration_ms = properties["duration_ms"].value<int>();
+                StartMusicPlayback([this, chord, duration_ms]() {
+                    synth_->PlayChordByName(chord.c_str(), duration_ms);
+                });
+                return "playing chord " + chord;
+            });
+
+        mcp_server.AddTool(
+            "self.musevibe.play_note",
+            "端侧 Karplus-Strong 物理建模合成器弹奏单音。frequency_hz: 频率 Hz 整数（如 262=C4, 294=D4, 330=E4, 392=G4）；"
+            "duration_ms: 持续时长毫秒（默认 1000）",
+            PropertyList({
+                Property("frequency_hz", kPropertyTypeInteger, 262, 20, 5000),
+                Property("duration_ms", kPropertyTypeInteger, 1000, 100, 5000)
+            }),
+            [this](const PropertyList& properties) -> ReturnValue {
+                int freq_hz = properties["frequency_hz"].value<int>();
+                int duration_ms = properties["duration_ms"].value<int>();
+                StartMusicPlayback([this, freq_hz, duration_ms]() {
+                    synth_->PlayNote((float)freq_hz, duration_ms);
+                });
+                return "playing note " + std::to_string(freq_hz) + "Hz";
+            });
+
+        mcp_server.AddTool(
+            "self.musevibe.stop_music",
+            "立即停止当前播放的音乐",
+            PropertyList(),
+            [this](const PropertyList& properties) -> ReturnValue {
+                StopMusic();
+                return "music stopped";
+            });
+
+        mcp_server.AddTool(
+            "self.musevibe.list_chords",
+            "列出支持的吉他和弦名称（C / Dm / Em / F / G / Am）",
+            PropertyList(),
+            [](const PropertyList& properties) -> ReturnValue {
+                return "[\"C\",\"Dm\",\"Em\",\"F\",\"G\",\"Am\"]";
+            });
 
         ESP_LOGI(TAG, "MCP工具注册完成");
+    }
+
+    // 端侧音乐播放任务：拉起 Karplus-Strong 合成器，把 PCM 流推到 I2S 喇叭。
+    void StartMusicPlayback(std::function<void()> prepare) {
+        std::lock_guard<std::mutex> lock(music_mutex_);
+        // 若已有播放任务，先停掉
+        if (music_task_handle_ != nullptr) {
+            music_stop_flag_ = true;
+            while (music_task_handle_ != nullptr) {
+                vTaskDelay(pdMS_TO_TICKS(10));
+            }
+        }
+        if (synth_ == nullptr) {
+            auto* codec = Board::GetInstance().GetAudioCodec();
+            int sr = codec ? codec->output_sample_rate() : KarplusStrongSynth::kDefaultSampleRate;
+            synth_ = new KarplusStrongSynth(sr);
+        }
+        music_stop_flag_ = false;
+        prepare();
+        auto task_main = [](void* arg) {
+            MuseVibeController* self = static_cast<MuseVibeController*>(arg);
+            auto* codec = Board::GetInstance().GetAudioCodec();
+            if (codec == nullptr) {
+                ESP_LOGE(TAG, "No audio codec available, music task exits");
+                std::lock_guard<std::mutex> lk(self->music_mutex_);
+                self->music_task_handle_ = nullptr;
+                vTaskDelete(nullptr);
+                return;
+            }
+            constexpr int kFrameSize = 320;  // 20ms @ 16kHz
+            int16_t buf[kFrameSize];
+            while (!self->music_stop_flag_ && self->synth_->IsPlaying()) {
+                int n = self->synth_->Generate(buf, kFrameSize);
+                if (n <= 0) break;
+                codec->Write(buf, n);
+            }
+            std::lock_guard<std::mutex> lk(self->music_mutex_);
+            self->music_task_handle_ = nullptr;
+            vTaskDelete(nullptr);
+        };
+        xTaskCreate(task_main, "musevibe_music", 4096, this, 4, &music_task_handle_);
+    }
+
+    void StopMusic() {
+        music_stop_flag_ = true;
+        if (synth_ != nullptr) {
+            synth_->Stop();
+        }
     }
 
     ~MuseVibeController() {
