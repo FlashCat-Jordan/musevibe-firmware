@@ -10,6 +10,7 @@ set(SOURCES "audio/audio_codec.cc"
             "audio/codecs/es8389_audio_codec.cc"
             "audio/codecs/dummy_audio_codec.cc"
             "audio/processors/audio_debugger.cc"
+            "audio/karplus_strong.cc"
             "led/single_led.cc"
             "led/circular_strip.cc"
             "led/gpio_led.cc"
@@ -47,15 +48,12 @@ list(APPEND SOURCES
     "boards/common/wifi_board.cc"
     "boards/common/adc_battery_monitor.cc"
     "boards/common/afsk_demod.cc"
-    "boards/common/axp2101.cc"
     "boards/common/backlight.cc"
     "boards/common/button.cc"
     "boards/common/i2c_device.cc"
-    "boards/common/knob.cc"
     "boards/common/power_save_timer.cc"
     "boards/common/press_to_talk_mcp_tool.cc"
     "boards/common/sleep_timer.cc"
-    "boards/common/sy6970.cc"
     "boards/common/system_reset.cc"
 )
 list(APPEND INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/boards/common)
@@ -122,80 +120,10 @@ endif ()
 # Select language directory according to Kconfig
 if(CONFIG_LANGUAGE_ZH_CN)
     set(LANG_DIR "zh-CN")
-elseif(CONFIG_LANGUAGE_ZH_TW)
-    set(LANG_DIR "zh-TW")
 elseif(CONFIG_LANGUAGE_EN_US)
     set(LANG_DIR "en-US")
-elseif(CONFIG_LANGUAGE_JA_JP)
-    set(LANG_DIR "ja-JP")
-elseif(CONFIG_LANGUAGE_KO_KR)
-    set(LANG_DIR "ko-KR")
-elseif(CONFIG_LANGUAGE_VI_VN)
-    set(LANG_DIR "vi-VN")
-elseif(CONFIG_LANGUAGE_TH_TH)
-    set(LANG_DIR "th-TH")
-elseif(CONFIG_LANGUAGE_DE_DE)
-    set(LANG_DIR "de-DE")
-elseif(CONFIG_LANGUAGE_FR_FR)
-    set(LANG_DIR "fr-FR")
-elseif(CONFIG_LANGUAGE_ES_ES)
-    set(LANG_DIR "es-ES")
-elseif(CONFIG_LANGUAGE_IT_IT)
-    set(LANG_DIR "it-IT")
-elseif(CONFIG_LANGUAGE_RU_RU)
-    set(LANG_DIR "ru-RU")
-elseif(CONFIG_LANGUAGE_AR_SA)
-    set(LANG_DIR "ar-SA")
-elseif(CONFIG_LANGUAGE_HI_IN)
-    set(LANG_DIR "hi-IN")
-elseif(CONFIG_LANGUAGE_PT_PT)
-    set(LANG_DIR "pt-PT")
-elseif(CONFIG_LANGUAGE_PL_PL)
-    set(LANG_DIR "pl-PL")
-elseif(CONFIG_LANGUAGE_CS_CZ)
-    set(LANG_DIR "cs-CZ")
-elseif(CONFIG_LANGUAGE_FI_FI)
-    set(LANG_DIR "fi-FI")
-elseif(CONFIG_LANGUAGE_TR_TR)
-    set(LANG_DIR "tr-TR")
-elseif(CONFIG_LANGUAGE_ID_ID)
-    set(LANG_DIR "id-ID")
-elseif(CONFIG_LANGUAGE_UK_UA)
-    set(LANG_DIR "uk-UA")
-elseif(CONFIG_LANGUAGE_RO_RO)
-    set(LANG_DIR "ro-RO")
-elseif(CONFIG_LANGUAGE_BG_BG)
-    set(LANG_DIR "bg-BG")
-elseif(CONFIG_LANGUAGE_CA_ES)
-    set(LANG_DIR "ca-ES")
-elseif(CONFIG_LANGUAGE_DA_DK)
-    set(LANG_DIR "da-DK")
-elseif(CONFIG_LANGUAGE_EL_GR)
-    set(LANG_DIR "el-GR")
-elseif(CONFIG_LANGUAGE_FA_IR)
-    set(LANG_DIR "fa-IR")
-elseif(CONFIG_LANGUAGE_FIL_PH)
-    set(LANG_DIR "fil-PH")
-elseif(CONFIG_LANGUAGE_HE_IL)
-    set(LANG_DIR "he-IL")
-elseif(CONFIG_LANGUAGE_HR_HR)
-    set(LANG_DIR "hr-HR")
-elseif(CONFIG_LANGUAGE_HU_HU)
-    set(LANG_DIR "hu-HU")
-elseif(CONFIG_LANGUAGE_MS_MY)
-    set(LANG_DIR "ms-MY")
-elseif(CONFIG_LANGUAGE_NB_NO)
-    set(LANG_DIR "nb-NO")
-elseif(CONFIG_LANGUAGE_NL_NL)
-    set(LANG_DIR "nl-NL")
-elseif(CONFIG_LANGUAGE_SK_SK)
-    set(LANG_DIR "sk-SK")
-elseif(CONFIG_LANGUAGE_SL_SI)
-    set(LANG_DIR "sl-SI")
-elseif(CONFIG_LANGUAGE_SV_SE)
-    set(LANG_DIR "sv-SE")
-elseif(CONFIG_LANGUAGE_SR_RS)
-    set(LANG_DIR "sr-RS")
+else()
+    set(LANG_DIR "zh-CN")
 endif()
 
 # Define generation path
@@ -228,36 +156,8 @@ endif()
 
 file(GLOB COMMON_SOUNDS ${CMAKE_CURRENT_SOURCE_DIR}/assets/common/*.ogg)
 
-# If target chip is ESP32, exclude specific files to avoid build errors
-if(CONFIG_IDF_TARGET_ESP32)
-    list(REMOVE_ITEM SOURCES "audio/codecs/box_audio_codec.cc"
-                             "audio/codecs/es8388_audio_codec.cc"
-                             "audio/codecs/es8389_audio_codec.cc"
-                             "led/gpio_led.cc"
-                             "display/lvgl_display/jpg/image_to_jpeg.cpp"
-                             "display/lvgl_display/jpg/jpeg_to_image.c"
-                             )
-endif()
-
-# Add 4G/modem board sources only when uart-eth-modem component is available (not on ESP32-S3)
-if(NOT CONFIG_IDF_TARGET_ESP32S3)
-    list(APPEND SOURCES "boards/common/ml307_board.cc"
-                         "boards/common/nt26_board.cc"
-                         "boards/common/dual_network_board.cc"
-                         )
-endif()
-
-# Include EspVideo if target is ESP32S3 or ESP32P4
-if(CONFIG_IDF_TARGET_ESP32S3 OR CONFIG_IDF_TARGET_ESP32P4)
-    list(APPEND SOURCES "boards/common/esp_video.cc"
-                        "boards/common/rndis_board.cc"
-                        )
-endif()
-
-# Include Esp32Camera if target is ESP32S3
-if(CONFIG_IDF_TARGET_ESP32S3)
-    list(APPEND SOURCES "boards/common/esp32_camera.cc")
-endif()
+# MuseVibe 仅支持 ESP32-S3，Esp32Camera 是其唯一摄像头驱动。
+list(APPEND SOURCES "boards/common/esp32_camera.cc")
 
 set(MAIN_PRIV_REQUIRES_EXTRA "")
 
