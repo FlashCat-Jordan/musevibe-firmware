@@ -1,6 +1,6 @@
 # MuseVibe · AI 口袋音乐老师 固件
 
-> ESP32-S3 端云协同 AI 音乐陪伴机器人固件 · GOAI Boundless Agents 赛道二（无界应用 · AI+教育学习陪伴子场景）
+> ESP32-S3 端云协同 AI 音乐陪伴机器人固件
 
 ## MuseVibe 是什么
 
@@ -12,33 +12,24 @@
 **OPUS 16kHz 流式音频**让对话几乎无感延迟。
 **端云协同架构**让算力重活在云端、实时控制重活在端侧。
 
-## 赛道二定位
+## 适用场景
 
-GOAI Boundless Agents 赛道二的核心是"AI+教育学习陪伴"。MuseVibe 直击这个场景：
+MuseVibe 的同一套核心栈跑通多类用户：
 
-| 5 类核心人群 | MuseVibe 解法 |
+| 用户群 | MuseVibe 解法 |
 |---|---|
-| 音乐初学者（10-18 岁） | 4 和弦黄金进行 + Karplus-Strong 实时弹奏，配合 AI 老师实时纠正指法 |
-| 家长陪练（30-45 岁） | AI 自主编排机器人动作做示范，家长不用懂音乐也能陪练 |
-| 独处老人（65+ 岁） | 声纹识别 + 摄像头多模态，机器人记得每位老人，陪伴弹唱缓解孤独 |
+| 音乐初学者（10-18 岁） | 4 和弦黄金进行 + Karplus-Strong 实时弹奏，AI 老师实时纠正指法 |
+| 家长陪练 | AI 自主编排机器人动作做示范，家长不用懂音乐也能陪练 |
+| 独处老人 | 声纹识别 + 摄像头多模态，机器人记得每位用户，陪伴弹唱 |
 | 障碍人士陪伴 | 视觉+语音多模态，可自定义唤醒词和动作，适配不同障碍类型 |
-| 创客教育（K12 STEAM） | 开源五层栈，B2M2B 创客可在 MuseVibe 基础上二次开发 |
-
-## 无界性（Boundless）
-
-GOAI "无界"精神在 MuseVibe 上的体现：
-
-- **跨设备无界**：同一 Agent 内核可装入口袋机器人 / 桌面伙伴 / 教室大屏，MCP 协议是统一接口
-- **跨场景无界**：从音乐教育 → 老人陪伴 → 创客教育 → 障碍辅助，一套核心栈跑通
-- **协议无界**：基于 MCP 标准，可接任意 LLM（Qwen / DeepSeek / GPT），可挂任意 skill
-- **开源无界**：五层栈开源（硬件板 → 端侧固件 → 通信协议 → 云端 MCP → 创客工具链），B2M2B 创客二次开发
+| 创客教育（K12 STEAM） | 五层栈开源，B2M2B 创客可在 MuseVibe 基础上二次开发 |
 
 ## 产品能力 · 五大核心能力
 
 | 能力 | 实现 | 关键技术 |
 |---|---|---|
 | **会弹** | 4 和弦端侧实时弹奏 | Karplus-Strong 物理建模合成（[`main/audio/karplus_strong.cc`](main/audio/karplus_strong.cc)） |
-| **会唱** | 流式 TTS + 韵律建模 | OPUS 16kHz 编解码 + 上游音频框架 |
+| **会唱** | 流式 TTS + 韵律建模 | OPUS 16kHz 编解码 + 音频框架 |
 | **会陪** | 视觉 + 声纹多模态 | OV2640 摄像头 + 3D-Speaker 声纹识别 |
 | **会动** | 21 种舵机动作 + AI 自主编排 | `MuseVibeMovements` + MCP 工具集 |
 | **会教** | 端侧 Karplus-Strong + MCP music 工具 | `self.musevibe.play_chord` / `play_note` / `list_chords` |
@@ -65,13 +56,29 @@ GOAI "无界"精神在 MuseVibe 上的体现：
 [`main/audio/karplus_strong.cc`](main/audio/karplus_strong.cc) 实装了 Karplus & Strong 1983 论文的物理建模合成算法：
 
 - **延迟线**：N = sample_rate / frequency（如 16kHz / 262Hz = 61 samples）
-- **噪声激励**：pluck 时用 esp_random 填充白噪声作为初始能量
+- **噪声激励**：pluck 时用 `esp_random` 填充白噪声作为初始能量
 - **反馈低通**：每采样 `(buffer[i] + buffer[i+1]) / 2` 模拟弦的频散衰减
 - **额外阻尼**：Q15 定点乘 `decay_ = 0.9965` 模拟弦的物理阻尼
 - **多弦叠加**：6 弦上限，C 和弦 = C4(261.63) + E4(329.63) + G4(392.00) + C5(523.25)
 - **定点运算**：全程 int16/int32，无浮点，适合 ESP32-S3 的 Xtensa LX7
 
 支持 6 个和弦（C / Dm / Em / F / G / Am），构成 C-Am-F-G 黄金流行和弦进行，覆盖 90% 的流行歌曲伴奏需求。
+
+核心实现（完整代码见 `karplus_strong.cc`）：
+
+```c
+inline int16_t Process() {
+    int16_t y = buffer_[index_];
+    int next = (index_ + 1) % delay_length_;
+    // 反馈低通：相邻两采样平均，模拟弦的频散衰减
+    int32_t averaged = (int32_t(buffer_[index_]) + int32_t(buffer_[next])) >> 1;
+    // 物理阻尼：Q15 定点乘，避免浮点
+    averaged = (averaged * decay_) >> 15;
+    buffer_[index_] = int16_t(averaged);
+    index_ = next;
+    return y;
+}
+```
 
 通过 MCP 工具 `self.musevibe.play_chord({chord:"C", duration_ms:2000})` 调用，云端 LLM 可根据对话语义自主决定何时弹奏什么和弦。
 
@@ -151,7 +158,7 @@ idf.py build flash monitor
 
 ## 安全合规
 
-MuseVibe 面向教育和陪伴场景，**5 条不可越过的安全边界**：
+MuseVibe 面向教育和陪伴场景，5 条不可越过的安全边界：
 
 1. **麦克风/摄像头隐私边界** — 默认本地处理唤醒词和声纹特征，云端只接收用户主动开启会话后的音频；摄像头截图只在用户触发时回传。
 2. **儿童数据保护** — 不上传儿童生物特征到云端，声纹模板本地存储；可一键清空。
